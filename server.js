@@ -1,82 +1,83 @@
-const express = require("express");
-const cors = require("cors");
+import express from "express";
+import cors from "cors";
 
 const app = express();
 
-// Autorise les appels depuis l'extension / navigateur
-app.use(cors());
+// (optionnel) JSON si tu ajoutes des POST plus tard
 app.use(express.json());
 
-// Port Render (obligatoire) ou port local
-const PORT = process.env.PORT || 3333;
+// CORS large (pas dangereux si la clé est obligatoire)
+app.use(
+  cors({
+    origin: true,
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "X-Fyndy-Key"],
+  })
+);
 
-// Clé API (optionnelle mais recommandée)
-const API_KEY = process.env.FYNDY_API_KEY || "";
-
-// Petite fonction : vérifier la clé si elle existe
-function checkKey(req) {
-  // Si aucune clé n'est définie sur Render, on ne bloque pas (mode démo simple)
-  if (!API_KEY) return true;
-
-  // On accepte soit:
-  // - header: x-api-key
-  // - ou paramètre URL: ?key=...
-  const headerKey = req.headers["x-api-key"];
-  const urlKey = req.query.key;
-
-  return headerKey === API_KEY || urlKey === API_KEY;
-}
-
-// Route santé (pour tester que le service est en ligne)
-app.get("/health", (req, res) => {
-  res.json({ ok: true, service: "fyndy-api", port: PORT });
-});
-
-// Route décision (démo)
-app.get("/api/decision", (req, res) => {
-  if (!checkKey(req)) {
-    return res.status(401).json({ ok: false, error: "Clé API invalide" });
+// ----- Sécurité : clé obligatoire -----
+// La clé doit être envoyée dans l'en-tête: X-Fyndy-Key
+function requireApiKey(req, res, next) {
+  const serverKey = process.env.FYNDY_API_KEY;
+  if (!serverKey) {
+    return res.status(500).json({ ok: false, error: "Server key not set" });
   }
 
-  const q = (req.query.q || "").toString();
+  const clientKey = req.header("X-Fyndy-Key");
+  if (!clientKey || clientKey !== serverKey) {
+    return res.status(401).json({ ok: false, error: "Unauthorized" });
+  }
 
-  // --- Simulation "IA" ---
-  const isPrecise = /[a-zA-Z]+\s*[0-9]{2,}/.test(q); // ex: "Grohe S240"
-  const decision_status = isPrecise ? "Strong" : "Medium";
-  const confidence_score = isPrecise ? 86 : 82;
+  next();
+}
 
-  const type = isPrecise ? "best_price" : "best_value";
-  const label = isPrecise ? "Best Price Verified" : "Meilleur rapport qualité/prix";
-
-  const price_positioning = isPrecise ? "Best price detected" : "Top value detected";
-  const manipulation_risk = "Low";
-  const trusted_environment = "Trusted";
-
-  // Exemple de réponse produit
-  const decision = {
-    type,
-    label,
-    price: isPrecise ? 258 : 273,
-    currency: "€",
-    merchant: isPrecise ? "Cedeo" : "Leroy Merlin",
-    shipping: isPrecise ? "Livraison 24-48h" : "Livraison 2-3 jours",
-    url: "https://example.com/product"
-  };
-
-  // IMPORTANT : champs au niveau racine (pour éviter les — / undefined)
-  res.json({
-    ok: true,
-    query: q,
-    decision_status,
-    confidence_score,
-    price_positioning,
-    manipulation_risk,
-    trusted_environment,
-    decision
-  });
+// ----- Health (sans clé si tu veux, ou avec clé si tu préfères) -----
+// Ici je le laisse PUBLIC pour diagnostiquer facilement
+app.get("/health", (req, res) => {
+  res.json({ ok: true, service: "fyndy-api", port: process.env.PORT || 10000 });
 });
 
-// Lancement serveur
+// ----- Endpoint décision (protégé par clé) -----
+app.get("/api/decision", requireApiKey, (req, res) => {
+  const q = (req.query.q || "").toString().trim();
+
+  // Démo: réponse simulée (à remplacer par ta vraie logique plus tard)
+  const isPrecise = q.length >= 6 && /\d/.test(q);
+
+  const payload = {
+    ok: true,
+    query: q,
+    decision_status: isPrecise ? "Strong" : "Medium",
+    confidence_score: isPrecise ? 86 : 82,
+    price_positioning: isPrecise ? "Best price detected" : "Top value detected",
+    manipulation_risk: "Low",
+    trusted_environment: "Trusted",
+    decision: isPrecise
+      ? {
+          type: "best_price",
+          label: "Best Price Verified",
+          price: 258,
+          currency: "€",
+          merchant: "Cedeo",
+          shipping: "Livraison 24-48h",
+          url: "https://example.com/product",
+        }
+      : {
+          type: "best_value",
+          label: "Meilleur rapport qualité/prix",
+          price: 273,
+          currency: "€",
+          merchant: "Leroy Merlin",
+          shipping: "Livraison 2-3 jours",
+          url: "https://example.com/product",
+        },
+  };
+
+  res.json(payload);
+});
+
+// Render impose le PORT
+const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`Fyndy API running on port ${PORT}`);
 });
