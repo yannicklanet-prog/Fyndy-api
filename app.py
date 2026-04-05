@@ -21,9 +21,8 @@ HEADERS = {
     "Pragma": "no-cache",
 }
 
-# Petit cache mémoire pour éviter de taper la source à chaque clic
 CACHE = {}
-CACHE_TTL_SECONDS = 600  # 10 minutes
+CACHE_TTL_SECONDS = 900  # 15 minutes
 
 
 def normalize_spaces(text: str) -> str:
@@ -31,13 +30,6 @@ def normalize_spaces(text: str) -> str:
 
 
 def extract_price(text: str):
-    """
-    Extrait un prix depuis une chaîne.
-    Exemples gérés :
-    - 132,90 €
-    - 132.90€
-    - 132 €
-    """
     if not text:
         return None
 
@@ -58,24 +50,17 @@ def build_manomano_search_url(query: str) -> str:
 
 
 def parse_manomano_results(html: str):
-    """
-    Parsing best effort.
-    ManoMano peut changer son HTML. On essaie plusieurs stratégies.
-    """
     soup = BeautifulSoup(html, "html.parser")
     offers = []
-
-    # 1) Première stratégie : tous les liens produits plausibles
-    candidate_links = soup.select('a[href*="/p/"], a[href*="/fr/p/"], a[data-testid], a')
-
     seen = set()
+
+    candidate_links = soup.select('a[href*="/p/"], a[href*="/fr/p/"], a[data-testid], a')
 
     for link in candidate_links:
         href = link.get("href", "")
         if not href:
             continue
 
-        # Filtre grossier pour éviter trop de bruit
         href_ok = (
             "/p/" in href
             or "/fr/p/" in href
@@ -88,20 +73,13 @@ def parse_manomano_results(html: str):
         if not title or len(title) < 8:
             continue
 
-        # Cherche un prix proche dans le texte du lien puis du parent
         price = extract_price(link.get_text(" ", strip=True))
-        if price is None:
-            parent_text = ""
-            if link.parent:
-                parent_text = normalize_spaces(link.parent.get_text(" ", strip=True))
-            price = extract_price(parent_text)
 
-        if price is None:
-            # On tente un niveau au-dessus
-            grandparent_text = ""
-            if link.parent and link.parent.parent:
-                grandparent_text = normalize_spaces(link.parent.parent.get_text(" ", strip=True))
-            price = extract_price(grandparent_text)
+        if price is None and link.parent:
+            price = extract_price(normalize_spaces(link.parent.get_text(" ", strip=True)))
+
+        if price is None and link.parent and link.parent.parent:
+            price = extract_price(normalize_spaces(link.parent.parent.get_text(" ", strip=True)))
 
         if price is None:
             continue
@@ -118,22 +96,18 @@ def parse_manomano_results(html: str):
             "site": "ManoMano",
             "title": title,
             "price": round(price, 2),
-            "url": href
+            "url": href,
+            "estimated": False
         })
 
-        if len(offers) >= 5:
+        if len(offers) >= 3:
             break
 
-    # Tri par prix
     offers.sort(key=lambda x: x["price"])
     return offers[:3]
 
 
 def fallback_offers(query: str):
-    """
-    Fallback si ManoMano ne renvoie rien.
-    On reste honnête en marquant ces résultats comme estimés.
-    """
     q = (query or "").lower()
     base = 150
 
@@ -154,21 +128,21 @@ def fallback_offers(query: str):
             "title": f"Résultat estimé pour {query}",
             "price": round(base * 0.90, 2),
             "url": build_manomano_search_url(query),
-            "estimated": True,
+            "estimated": True
         },
         {
             "site": "Leroy Merlin",
             "title": f"Résultat estimé pour {query}",
             "price": round(base * 0.95, 2),
             "url": f"https://www.leroymerlin.fr/recherche?q={quote_plus(query)}",
-            "estimated": True,
+            "estimated": True
         },
         {
             "site": "Amazon",
             "title": f"Résultat estimé pour {query}",
             "price": round(base * 1.05, 2),
             "url": f"https://www.amazon.fr/s?k={quote_plus(query)}",
-            "estimated": True,
+            "estimated": True
         }
     ]
 
@@ -177,9 +151,11 @@ def get_cached(query: str):
     entry = CACHE.get(query)
     if not entry:
         return None
+
     if time.time() - entry["ts"] > CACHE_TTL_SECONDS:
         CACHE.pop(query, None)
         return None
+
     return entry["data"]
 
 
@@ -201,7 +177,6 @@ def home():
 
 @app.route("/search", methods=["GET"])
 def search():
-    payload = request.get_json(silent=True) or {}
     query = normalize_spaces(request.args.get("q", ""))
 
     if not query:
@@ -216,7 +191,9 @@ def search():
 
     try:
         url = build_manomano_search_url(query)
-        resp = requests.get(url, headers=HEADERS, timeout=15)
+
+        # Timeout volontairement court pour ne pas ruiner l'UX
+        resp = requests.get(url, headers=HEADERS, timeout=3.5)
         resp.raise_for_status()
 
         offers = parse_manomano_results(resp.text)
