@@ -199,10 +199,10 @@ def home():
     })
 
 
-@app.route("/search", methods=["POST"])
+@app.route("/search", methods=["GET"])
 def search():
     payload = request.get_json(silent=True) or {}
-    query = normalize_spaces(payload.get("query", ""))
+    query = normalize_spaces(request.args.get("q", ""))
 
     if not query:
         return jsonify({
