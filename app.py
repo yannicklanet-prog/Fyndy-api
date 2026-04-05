@@ -29,82 +29,23 @@ def normalize_spaces(text: str) -> str:
     return re.sub(r"\s+", " ", (text or "")).strip()
 
 
-def extract_price(text: str):
-    if not text:
+def get_cached(query: str):
+    entry = CACHE.get(query)
+    if not entry:
         return None
 
-    text = text.replace("\xa0", " ")
-    match = re.search(r"(\d{1,5}(?:[.,]\d{1,2})?)\s*€", text)
-    if not match:
+    if time.time() - entry["ts"] > CACHE_TTL_SECONDS:
+        CACHE.pop(query, None)
         return None
 
-    value = match.group(1).replace(",", ".")
-    try:
-        return float(value)
-    except ValueError:
-        return None
+    return entry["data"]
 
 
-def build_manomano_search_url(query: str) -> str:
-    return f"https://www.manomano.fr/recherche/{quote_plus(query)}"
-
-
-def parse_manomano_results(html: str):
-    soup = BeautifulSoup(html, "html.parser")
-    offers = []
-    seen = set()
-
-    candidate_links = soup.select('a[href*="/p/"], a[href*="/fr/p/"], a[data-testid], a')
-
-    for link in candidate_links:
-        href = link.get("href", "")
-        if not href:
-            continue
-
-        href_ok = (
-            "/p/" in href
-            or "/fr/p/" in href
-            or "manomano.fr/" in href
-        )
-        if not href_ok:
-            continue
-
-        title = normalize_spaces(link.get_text(" ", strip=True))
-        if not title or len(title) < 8:
-            continue
-
-        price = extract_price(link.get_text(" ", strip=True))
-
-        if price is None and link.parent:
-            price = extract_price(normalize_spaces(link.parent.get_text(" ", strip=True)))
-
-        if price is None and link.parent and link.parent.parent:
-            price = extract_price(normalize_spaces(link.parent.parent.get_text(" ", strip=True)))
-
-        if price is None:
-            continue
-
-        if href.startswith("/"):
-            href = "https://www.manomano.fr" + href
-
-        key = (title.lower(), round(price, 2), href)
-        if key in seen:
-            continue
-        seen.add(key)
-
-        offers.append({
-            "site": "ManoMano",
-            "title": title,
-            "price": round(price, 2),
-            "url": href,
-            "estimated": False
-        })
-
-        if len(offers) >= 3:
-            break
-
-    offers.sort(key=lambda x: x["price"])
-    return offers[:3]
+def set_cached(query: str, data):
+    CACHE[query] = {
+        "ts": time.time(),
+        "data": data
+    }
 
 
 def fallback_offers(query: str):
@@ -127,7 +68,7 @@ def fallback_offers(query: str):
             "site": "ManoMano",
             "title": f"Résultat estimé pour {query}",
             "price": round(base * 0.90, 2),
-            "url": build_manomano_search_url(query),
+            "url": f"https://www.manomano.fr/recherche/{quote_plus(query)}",
             "estimated": True
         },
         {
@@ -147,23 +88,41 @@ def fallback_offers(query: str):
     ]
 
 
-def get_cached(query: str):
-    entry = CACHE.get(query)
-    if not entry:
-        return None
+def parse_google_shopping_results(html: str, fallback_url: str):
+    soup = BeautifulSoup(html, "html.parser")
+    offers = []
 
-    if time.time() - entry["ts"] > CACHE_TTL_SECONDS:
-        CACHE.pop(query, None)
-        return None
+    # Sélecteurs best effort pour Google Shopping
+    items = soup.select("div.sh-dgr__content")[:3]
 
-    return entry["data"]
+    for item in items:
+        title_el = item.select_one("h3") or item.select_one("h4")
+        price_el = item.select_one(".a8Pemb") or item.select_one(".T14wmb")
+        link_el = item.select_one("a")
 
+        if not title_el or not price_el:
+            continue
 
-def set_cached(query: str, data):
-    CACHE[query] = {
-        "ts": time.time(),
-        "data": data
-    }
+        title = normalize_spaces(title_el.get_text(" ", strip=True))
+        price = normalize_spaces(price_el.get_text(" ", strip=True))
+        url = fallback_url
+
+        if link_el and link_el.get("href"):
+            href = link_el.get("href")
+            if href.startswith("/"):
+                url = "https://www.google.com" + href
+            else:
+                url = href
+
+        offers.append({
+            "site": "Google Shopping",
+            "title": title,
+            "price": price,
+            "url": url,
+            "estimated": False
+        })
+
+    return offers
 
 
 @app.route("/", methods=["GET"])
@@ -189,14 +148,13 @@ def search():
     if cached:
         return jsonify(cached)
 
-    try:
-        url = build_manomano_search_url(query)
+    google_url = f"https://www.google.com/search?q={quote_plus(query)}&tbm=shop"
 
-        # Timeout volontairement court pour ne pas ruiner l'UX
-        resp = requests.get(url, headers=HEADERS, timeout=3.5)
+    try:
+        resp = requests.get(google_url, headers=HEADERS, timeout=3.5)
         resp.raise_for_status()
 
-        offers = parse_manomano_results(resp.text)
+        offers = parse_google_shopping_results(resp.text, google_url)
 
         used_fallback = False
         if not offers:
@@ -206,7 +164,7 @@ def search():
         result = {
             "ok": True,
             "query": query,
-            "source": "manomano_search",
+            "source": "google_shopping",
             "used_fallback": used_fallback,
             "offers": offers
         }
