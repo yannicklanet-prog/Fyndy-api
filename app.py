@@ -18,6 +18,31 @@ def normalize_spaces(text: str) -> str:
     return " ".join((text or "").split()).strip()
 
 
+def clean_price(price_value):
+    """
+    Convertit un prix texte en float.
+    Exemples :
+    "119,99 €" -> 119.99
+    "1 729,00 €" -> 1729.00
+    """
+    if price_value is None:
+        return None
+
+    if isinstance(price_value, (int, float)):
+        return float(price_value)
+
+    try:
+        text = str(price_value)
+        text = text.replace("€", "")
+        text = text.replace("\u20ac", "")
+        text = text.replace("\xa0", " ")
+        text = text.replace(" ", "")
+        text = text.replace(",", ".")
+        return float(text)
+    except Exception:
+        return None
+
+
 def get_cached(query: str):
     entry = CACHE.get(query)
     if not entry:
@@ -51,6 +76,8 @@ def fallback_offers(query: str):
         base = 300
     elif "receveur" in q:
         base = 220
+    elif "iphone" in q:
+        base = 900
 
     return [
         {
@@ -77,19 +104,32 @@ def fallback_offers(query: str):
     ]
 
 
-def parse_serpapi_shopping(data: dict):
+def parse_serpapi_shopping(data: dict, query: str):
     offers = []
-
     shopping_results = data.get("shopping_results", []) or []
+    query_upper = normalize_spaces(query).upper()
 
-    for item in shopping_results[:3]:
+    for item in shopping_results[:10]:
         title = normalize_spaces(item.get("title", ""))
-        price = item.get("price", "")
+        raw_price = item.get("price", "")
         source = normalize_spaces(item.get("source", "Google Shopping"))
         link = item.get("link") or item.get("product_link") or "#"
+        price = clean_price(raw_price)
 
         if not title:
             continue
+
+        # Filtre basique : si la requête est précise, on favorise les titres proches
+        title_upper = title.upper()
+        is_precise_query = len(query_upper.split()) >= 2
+
+        if is_precise_query:
+            query_tokens = [t for t in query_upper.split() if len(t) >= 3]
+            matched_tokens = sum(1 for t in query_tokens if t in title_upper)
+
+            # Si trop peu de mots correspondent, on saute
+            if query_tokens and matched_tokens < max(1, len(query_tokens) // 2):
+                continue
 
         offers.append({
             "site": source or "Google Shopping",
@@ -99,7 +139,13 @@ def parse_serpapi_shopping(data: dict):
             "estimated": False
         })
 
-    return offers
+    # On enlève les offres sans prix
+    offers = [o for o in offers if o["price"] is not None]
+
+    # Tri croissant = meilleur prix en premier
+    offers.sort(key=lambda x: x["price"])
+
+    return offers[:3]
 
 
 @app.route("/", methods=["GET"])
@@ -150,7 +196,7 @@ def search():
         resp.raise_for_status()
         data = resp.json()
 
-        offers = parse_serpapi_shopping(data)
+        offers = parse_serpapi_shopping(data, query)
 
         used_fallback = False
         if not offers:
