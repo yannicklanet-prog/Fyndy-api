@@ -1,32 +1,21 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 import requests
-from bs4 import BeautifulSoup
-from urllib.parse import quote_plus
-import re
+import os
 import time
+from urllib.parse import quote_plus
 
 app = Flask(__name__)
 CORS(app)
 
-HEADERS = {
-    "User-Agent": (
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/124.0.0.0 Safari/537.36"
-    ),
-    "Accept-Language": "fr-FR,fr;q=0.9,en;q=0.8",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Cache-Control": "no-cache",
-    "Pragma": "no-cache",
-}
+SERPAPI_KEY = os.getenv("SERPAPI_KEY", "").strip()
 
 CACHE = {}
 CACHE_TTL_SECONDS = 900  # 15 minutes
 
 
 def normalize_spaces(text: str) -> str:
-    return re.sub(r"\s+", " ", (text or "")).strip()
+    return " ".join((text or "").split()).strip()
 
 
 def get_cached(query: str):
@@ -88,37 +77,25 @@ def fallback_offers(query: str):
     ]
 
 
-def parse_google_shopping_results(html: str, fallback_url: str):
-    soup = BeautifulSoup(html, "html.parser")
+def parse_serpapi_shopping(data: dict):
     offers = []
 
-    # Sélecteurs best effort pour Google Shopping
-    items = soup.select("div.sh-dgr__content")[:3]
+    shopping_results = data.get("shopping_results", []) or []
 
-    for item in items:
-        title_el = item.select_one("h3") or item.select_one("h4")
-        price_el = item.select_one(".a8Pemb") or item.select_one(".T14wmb")
-        link_el = item.select_one("a")
+    for item in shopping_results[:3]:
+        title = normalize_spaces(item.get("title", ""))
+        price = item.get("price", "")
+        source = normalize_spaces(item.get("source", "Google Shopping"))
+        link = item.get("link") or item.get("product_link") or "#"
 
-        if not title_el or not price_el:
+        if not title:
             continue
 
-        title = normalize_spaces(title_el.get_text(" ", strip=True))
-        price = normalize_spaces(price_el.get_text(" ", strip=True))
-        url = fallback_url
-
-        if link_el and link_el.get("href"):
-            href = link_el.get("href")
-            if href.startswith("/"):
-                url = "https://www.google.com" + href
-            else:
-                url = href
-
         offers.append({
-            "site": "Google Shopping",
+            "site": source or "Google Shopping",
             "title": title,
             "price": price,
-            "url": url,
+            "url": link,
             "estimated": False
         })
 
@@ -148,13 +125,32 @@ def search():
     if cached:
         return jsonify(cached)
 
-    google_url = f"https://www.google.com/search?q={quote_plus(query)}&tbm=shop"
+    if not SERPAPI_KEY:
+        result = {
+            "ok": True,
+            "query": query,
+            "source": "fallback_no_serpapi_key",
+            "used_fallback": True,
+            "warning": "SERPAPI_KEY absente",
+            "offers": fallback_offers(query)
+        }
+        set_cached(query, result)
+        return jsonify(result)
 
     try:
-        resp = requests.get(google_url, headers=HEADERS, timeout=3.5)
-        resp.raise_for_status()
+        params = {
+            "engine": "google_shopping",
+            "q": query,
+            "hl": "fr",
+            "gl": "fr",
+            "api_key": SERPAPI_KEY
+        }
 
-        offers = parse_google_shopping_results(resp.text, google_url)
+        resp = requests.get("https://serpapi.com/search.json", params=params, timeout=5)
+        resp.raise_for_status()
+        data = resp.json()
+
+        offers = parse_serpapi_shopping(data)
 
         used_fallback = False
         if not offers:
@@ -164,7 +160,7 @@ def search():
         result = {
             "ok": True,
             "query": query,
-            "source": "google_shopping",
+            "source": "serpapi_google_shopping",
             "used_fallback": used_fallback,
             "offers": offers
         }
@@ -176,9 +172,9 @@ def search():
         result = {
             "ok": True,
             "query": query,
-            "source": "fallback_only",
+            "source": "fallback_request_error",
             "used_fallback": True,
-            "warning": f"Source distante indisponible: {str(e)}",
+            "warning": f"Erreur SerpAPI: {str(e)}",
             "offers": fallback_offers(query)
         }
         set_cached(query, result)
