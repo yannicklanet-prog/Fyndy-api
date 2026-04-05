@@ -114,12 +114,13 @@ def parse_serpapi_shopping(data: dict, query: str):
         raw_price = item.get("price", "")
         source = normalize_spaces(item.get("source", "Google Shopping"))
         link = item.get("link") or item.get("product_link") or "#"
-        price = clean_price(raw_price)
+
+        cleaned_price = clean_price(raw_price)
 
         if not title:
             continue
 
-        # Filtre basique : si la requête est précise, on favorise les titres proches
+        # Filtre basique pour les requêtes un peu précises
         title_upper = title.upper()
         is_precise_query = len(query_upper.split()) >= 2
 
@@ -127,14 +128,13 @@ def parse_serpapi_shopping(data: dict, query: str):
             query_tokens = [t for t in query_upper.split() if len(t) >= 3]
             matched_tokens = sum(1 for t in query_tokens if t in title_upper)
 
-            # Si trop peu de mots correspondent, on saute
             if query_tokens and matched_tokens < max(1, len(query_tokens) // 2):
                 continue
 
         offers.append({
             "site": source or "Google Shopping",
             "title": title,
-            "price": price,
+            "price": cleaned_price,
             "url": link,
             "estimated": False
         })
@@ -142,7 +142,7 @@ def parse_serpapi_shopping(data: dict, query: str):
     # On enlève les offres sans prix
     offers = [o for o in offers if o["price"] is not None]
 
-    # Tri croissant = meilleur prix en premier
+    # On trie par prix croissant
     offers.sort(key=lambda x: x["price"])
 
     return offers[:3]
