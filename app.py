@@ -21,6 +21,18 @@ KNOWN_BRANDS = [
     "villeroy", "laufen", "ondyna", "fantini", "cristina"
 ]
 
+COMPARATOR_KEYWORDS = [
+    "idealo",
+    "klarna",
+    "shopping",
+    "google shopping",
+    "kelkoo",
+    "le guide",
+    "shopalike",
+    "prix",
+    "comparateur"
+]
+
 
 def normalize(text):
     return " ".join((text or "").lower().split())
@@ -108,17 +120,23 @@ def relevance(query, title):
     return score
 
 
+def is_comparator_site(site: str, title: str = "") -> bool:
+    s = normalize(site)
+    t = normalize(title)
+
+    for keyword in COMPARATOR_KEYWORDS:
+        if keyword in s or keyword in t:
+            return True
+
+    return False
+
+
 def compute_trust(site, title):
-    """
-    Score de confiance simple.
-    Base provisoire avant vrai moteur Avobot.
-    """
     s = normalize(site)
     t = normalize(title)
 
     score = 70
 
-    # score vendeur/source
     if "amazon" in s:
         score += 2
     if "leroy" in s:
@@ -127,6 +145,8 @@ def compute_trust(site, title):
         score += 4
     if "castorama" in s:
         score += 5
+    if "darty" in s:
+        score += 5
     if "cdiscount" in s:
         score -= 5
     if "marketplace" in s:
@@ -134,7 +154,9 @@ def compute_trust(site, title):
     if "seller" in s:
         score -= 2
 
-    # signaux titre
+    if is_comparator_site(site, title):
+        score -= 12
+
     if "promo" in t:
         score -= 3
     if "officiel" in t:
@@ -169,7 +191,6 @@ def value_score(offer):
     if not price or price <= 0:
         return -999999
 
-    # équilibre : prix + confiance + pertinence
     price_score = max(0, 100 - price / 5)
     trust_score = trust * 1.2
     relevance_component = relevance_score_val * 1.5
@@ -189,6 +210,28 @@ def choose_lowest_offer(offers):
     return valid[0]
 
 
+def choose_cheaper_comparator_offer(offers, best_offer):
+    if not offers or not best_offer:
+        return None
+
+    comparators = [
+        o for o in offers
+        if o.get("price") is not None
+        and is_comparator_site(o.get("site", ""), o.get("title", ""))
+    ]
+
+    if not comparators:
+        return None
+
+    comparators.sort(key=lambda x: x["price"])
+    cheapest = comparators[0]
+
+    if cheapest["price"] < best_offer["price"]:
+        return cheapest
+
+    return None
+
+
 def choose_best_offer(offers, mode):
     if not offers:
         return None
@@ -197,16 +240,21 @@ def choose_best_offer(offers, mode):
     if not valid:
         return None
 
-    if mode == "lowest_price":
-        # pour une recherche précise : priorité au prix, mais on évite le douteux si possible
-        safe = [o for o in valid if o.get("trust_score", 0) >= 50]
-        target = safe if safe else valid
-        target.sort(key=lambda x: x["price"])
-        return target[0]
+    direct_sellers = [
+        o for o in valid
+        if not is_comparator_site(o.get("site", ""), o.get("title", ""))
+    ]
 
-    # recherche vague = meilleur rapport qualité/prix
-    valid.sort(key=lambda x: value_score(x), reverse=True)
-    return valid[0]
+    if mode == "lowest_price":
+        target = direct_sellers if direct_sellers else valid
+        safe = [o for o in target if o.get("trust_score", 0) >= 50]
+        final_target = safe if safe else target
+        final_target.sort(key=lambda x: x["price"])
+        return final_target[0]
+
+    target = direct_sellers if direct_sellers else valid
+    target.sort(key=lambda x: value_score(x), reverse=True)
+    return target[0]
 
 
 def fallback_offers(query):
@@ -257,6 +305,7 @@ def fallback_offers(query):
         offer["trust_score"] = trust
         offer["review_score"] = trust
         offer["review_signal"] = review_signal_from_score(trust)
+        offer["is_comparator"] = is_comparator_site(offer["site"], offer["title"])
         final.append(offer)
 
     return final
@@ -289,7 +338,8 @@ def parse_serpapi_shopping(data, query):
             "relevance_score": rel,
             "review_score": trust,
             "trust_score": trust,
-            "review_signal": review_signal_from_score(trust)
+            "review_signal": review_signal_from_score(trust),
+            "is_comparator": is_comparator_site(site, title)
         })
 
     return results
@@ -321,6 +371,7 @@ def search():
         offers = fallback_offers(query)
         lowest_offer = choose_lowest_offer(offers)
         best_offer = choose_best_offer(offers, mode)
+        cheaper_comparator_offer = choose_cheaper_comparator_offer(offers, best_offer)
 
         result = {
             "ok": True,
@@ -330,6 +381,8 @@ def search():
             "used_fallback": True,
             "lowest_offer": lowest_offer,
             "best_offer": best_offer,
+            "cheaper_comparator_offer": cheaper_comparator_offer,
+            "has_cheaper_comparator": cheaper_comparator_offer is not None,
             "offers": offers
         }
         set_cached(query, result)
@@ -357,6 +410,7 @@ def search():
 
         lowest_offer = choose_lowest_offer(offers)
         best_offer = choose_best_offer(offers, mode)
+        cheaper_comparator_offer = choose_cheaper_comparator_offer(offers, best_offer)
 
         result = {
             "ok": True,
@@ -366,6 +420,8 @@ def search():
             "used_fallback": used_fallback,
             "lowest_offer": lowest_offer,
             "best_offer": best_offer,
+            "cheaper_comparator_offer": cheaper_comparator_offer,
+            "has_cheaper_comparator": cheaper_comparator_offer is not None,
             "offers": offers
         }
 
@@ -376,6 +432,7 @@ def search():
         offers = fallback_offers(query)
         lowest_offer = choose_lowest_offer(offers)
         best_offer = choose_best_offer(offers, mode)
+        cheaper_comparator_offer = choose_cheaper_comparator_offer(offers, best_offer)
 
         result = {
             "ok": True,
@@ -386,6 +443,8 @@ def search():
             "warning": str(e),
             "lowest_offer": lowest_offer,
             "best_offer": best_offer,
+            "cheaper_comparator_offer": cheaper_comparator_offer,
+            "has_cheaper_comparator": cheaper_comparator_offer is not None,
             "offers": offers
         }
         set_cached(query, result)
