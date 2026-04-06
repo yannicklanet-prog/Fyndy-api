@@ -21,18 +21,6 @@ KNOWN_BRANDS = [
     "villeroy", "laufen", "ondyna", "fantini", "cristina"
 ]
 
-COMPARATOR_KEYWORDS = [
-    "idealo",
-    "klarna",
-    "shopping",
-    "google shopping",
-    "kelkoo",
-    "le guide",
-    "shopalike",
-    "prix",
-    "comparateur"
-]
-
 
 def normalize(text):
     return " ".join((text or "").lower().split())
@@ -120,12 +108,29 @@ def relevance(query, title):
     return score
 
 
-def is_comparator_site(site: str, title: str = "") -> bool:
+def is_comparator_site(site: str, title: str = ""):
     s = normalize(site)
     t = normalize(title)
 
-    for keyword in COMPARATOR_KEYWORDS:
-        if keyword in s or keyword in t:
+    keywords = [
+        "idealo",
+        "klarna",
+        "kelkoo",
+        "shopalike",
+        "google shopping",
+        "shopping",
+        "comparateur",
+        "compare",
+        "comparer",
+        "prix",
+        "offers",
+        "offer",
+        "deals",
+        "deal"
+    ]
+
+    for k in keywords:
+        if k in s or k in t:
             return True
 
     return False
@@ -147,6 +152,12 @@ def compute_trust(site, title):
         score += 5
     if "darty" in s:
         score += 5
+    if "lapeyre" in s:
+        score += 5
+    if "bricoman" in s:
+        score += 3
+    if "bricoman" in s:
+        score += 3
     if "cdiscount" in s:
         score -= 5
     if "marketplace" in s:
