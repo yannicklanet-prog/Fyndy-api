@@ -164,13 +164,60 @@ def is_comparator_site(site: str, title: str = ""):
 
 
 def review_signal_from_score(score):
-    if score >= 80:
+    if score >= 85:
         return "fiable"
-    if score >= 65:
+    if score >= 68:
         return "correct"
     if score >= 50:
         return "prudence"
     return "douteux"
+
+
+def extract_google_reviews(data):
+    """
+    Essaie de récupérer la note globale et le nombre d'avis
+    depuis différents blocs Google.
+    """
+    candidates = []
+
+    knowledge_graph = data.get("knowledge_graph", {}) or {}
+    if knowledge_graph:
+        candidates.append(knowledge_graph)
+
+    answer_box = data.get("answer_box", {}) or {}
+    if answer_box:
+        candidates.append(answer_box)
+
+    product_result = data.get("product_result", {}) or {}
+    if product_result:
+        candidates.append(product_result)
+
+    inline_products = data.get("inline_products", []) or []
+    if inline_products:
+        candidates.extend(inline_products[:5])
+
+    shopping_results = data.get("shopping_results", []) or []
+    if shopping_results:
+        candidates.extend(shopping_results[:5])
+
+    for block in candidates:
+        rating = clean_rating(
+            block.get("rating")
+            or block.get("reviews_rating")
+            or block.get("stars")
+        )
+
+        reviews = clean_reviews_count(
+            block.get("reviews")
+            or block.get("reviews_count")
+            or block.get("rating_count")
+            or block.get("user_reviews")
+        )
+
+        if rating is not None or reviews > 0:
+            return rating, reviews
+
+    return None, 0
 
 
 def compute_review_score(site, title, rating=None, reviews_count=0, price=None, median_price=None):
@@ -181,11 +228,12 @@ def compute_review_score(site, title, rating=None, reviews_count=0, price=None, 
     - vendeur/source
     - signaux suspects
     - prix anormalement bas
+    - MAIS les vrais excellents avis reprennent la main
     """
     s = normalize(site)
     t = normalize(title)
 
-    score = 60
+    score = 58
 
     # Source / vendeur
     if "amazon" in s:
@@ -202,18 +250,18 @@ def compute_review_score(site, title, rating=None, reviews_count=0, price=None, 
         score += 5
     if "bricoman" in s:
         score += 3
+    if "cdiscount" in s:
+        score -= 5
     if "marketplace" in s:
         score -= 10
     if "seller" in s:
         score -= 4
-    if "cdiscount" in s:
-        score -= 5
 
     # Comparateurs = pas vendeur direct
     if is_comparator_site(site, title):
         score -= 14
 
-    # Signaux titre
+    # Signaux dans le titre
     if "promo" in t:
         score -= 3
     if "officiel" in t:
@@ -231,10 +279,12 @@ def compute_review_score(site, title, rating=None, reviews_count=0, price=None, 
 
     # Note moyenne
     if rating is not None:
-        if rating >= 4.7:
-            score += 12
-        elif rating >= 4.5:
-            score += 9
+        if rating >= 4.8:
+            score += 14
+        elif rating >= 4.6:
+            score += 11
+        elif rating >= 4.4:
+            score += 8
         elif rating >= 4.2:
             score += 5
         elif rating >= 4.0:
@@ -245,7 +295,9 @@ def compute_review_score(site, title, rating=None, reviews_count=0, price=None, 
             score -= 10
 
     # Nombre d'avis
-    if reviews_count >= 500:
+    if reviews_count >= 1000:
+        score += 12
+    elif reviews_count >= 500:
         score += 10
     elif reviews_count >= 200:
         score += 8
@@ -261,9 +313,9 @@ def compute_review_score(site, title, rating=None, reviews_count=0, price=None, 
     # Signaux suspects : très bonne note avec très peu d'avis
     if rating is not None and reviews_count > 0:
         if rating >= 4.8 and reviews_count < 10:
-            score -= 10
-        if rating >= 4.7 and reviews_count < 5:
             score -= 12
+        elif rating >= 4.7 and reviews_count < 20:
+            score -= 8
 
     # Prix anormalement bas par rapport au marché détecté
     if price is not None and median_price is not None and median_price > 0:
@@ -274,6 +326,15 @@ def compute_review_score(site, title, rating=None, reviews_count=0, price=None, 
             score -= 7
         elif ratio < 0.92:
             score -= 3
+
+    # PRIORITÉ AUX VRAIS EXCELLENTS AVIS
+    if rating is not None and reviews_count > 0:
+        if rating >= 4.7 and reviews_count >= 500:
+            score = max(score, 92)
+        elif rating >= 4.6 and reviews_count >= 100:
+            score = max(score, 88)
+        elif rating >= 4.4 and reviews_count >= 50:
+            score = max(score, 80)
 
     return max(25, min(95, round(score)))
 
@@ -438,16 +499,17 @@ def fallback_offers(query):
     return enrich_offers_with_review_score(offers)
 
 
-def parse_serpapi_shopping(data, query):
+def parse_google_results(data, query):
+    global_rating, global_reviews = extract_google_reviews(data)
     results = []
 
-    for item in data.get("shopping_results", [])[:20]:
+    shopping_results = data.get("shopping_results", []) or []
+
+    for item in shopping_results[:20]:
         title = item.get("title", "")
         price = clean_price(item.get("price"))
         site = item.get("source", "Google")
         link = item.get("link") or item.get("product_link") or "#"
-        rating = clean_rating(item.get("rating"))
-        reviews_count = clean_reviews_count(item.get("reviews"))
 
         if not title or price is None:
             continue
@@ -455,6 +517,12 @@ def parse_serpapi_shopping(data, query):
         rel = relevance(query, title)
         if rel < 10:
             continue
+
+        item_rating = clean_rating(item.get("rating"))
+        item_reviews = clean_reviews_count(item.get("reviews"))
+
+        rating = item_rating if item_rating is not None else global_rating
+        reviews_count = item_reviews if item_reviews > 0 else global_reviews
 
         results.append({
             "site": site,
@@ -516,18 +584,18 @@ def search():
 
     try:
         params = {
-            "engine": "google_shopping",
+            "engine": "google",
             "q": query,
             "api_key": SERPAPI_KEY,
             "hl": "fr",
             "gl": "fr"
         }
 
-        r = requests.get("https://serpapi.com/search.json", params=params, timeout=5)
+        r = requests.get("https://serpapi.com/search.json", params=params, timeout=6)
         r.raise_for_status()
         data = r.json()
 
-        offers = parse_serpapi_shopping(data, query)
+        offers = parse_google_results(data, query)
 
         used_fallback = False
         if not offers:
@@ -542,7 +610,7 @@ def search():
             "ok": True,
             "query": query,
             "mode": mode,
-            "source": "serpapi_google_shopping",
+            "source": "serpapi_google",
             "used_fallback": used_fallback,
             "lowest_offer": lowest_offer,
             "best_offer": best_offer,
