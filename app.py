@@ -1,130 +1,170 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-import requests
-import os
-from urllib.parse import quote_plus
+(function () {
+  let fyndyBox = null;
 
-app = Flask(__name__)
-CORS(app)
+  function getScoreColor(score) {
+    if (score >= 80) return "#16a34a";
+    if (score >= 60) return "#f59e0b";
+    return "#dc2626";
+  }
 
-SERPAPI_KEY = os.getenv("SERPAPI_KEY", "").strip()
-
-
-def search_amazon(query):
-    return {
-        "site": "Amazon",
-        "title": query,
-        "price": None,
-        "url": f"https://www.amazon.fr/s?k={quote_plus(query)}",
-        "estimated": False,
-        "review_score": None,
-        "trust_score": 75
+  function formatPrice(price) {
+    if (price === null || price === undefined || price === "") {
+      return "Voir le prix";
     }
 
-
-def search_leroy(query):
-    return {
-        "site": "Leroy Merlin",
-        "title": query,
-        "price": None,
-        "url": f"https://www.leroymerlin.fr/recherche?q={quote_plus(query)}",
-        "estimated": False,
-        "review_score": None,
-        "trust_score": 80
+    const n = Number(String(price).replace(",", ".").replace("€", "").trim());
+    if (Number.isNaN(n)) {
+      return "Voir le prix";
     }
 
+    return `${n.toFixed(2).replace(".", ",")} €`;
+  }
 
-def search_manomano(query):
-    return {
-        "site": "ManoMano",
-        "title": query,
-        "price": None,
-        "url": f"https://www.manomano.fr/recherche/{quote_plus(query)}",
-        "estimated": False,
-        "review_score": None,
-        "trust_score": 70
+  function createPopup(data) {
+    if (fyndyBox) {
+      fyndyBox.remove();
     }
 
+    const offer = data.best_offer || data.lowest_offer;
+    if (!offer) return;
 
-def fallback_real(query):
-    return [
-        search_leroy(query),
-        search_amazon(query),
-        search_manomano(query)
-    ]
+    const box = document.createElement("div");
+    box.id = "fyndy-box";
 
+    const score = offer.review_score;
+    const hasRealPrice =
+      offer.price !== null &&
+      offer.price !== undefined &&
+      offer.price !== "";
 
-def parse_google(data):
-    results = []
+    let scoreHTML = "";
 
-    for item in data.get("shopping_results", []):
-        price = item.get("price")
-        title = item.get("title")
-        link = item.get("link")
-        site = item.get("source")
+    if (score === null || score === undefined) {
+      scoreHTML = `
+        <div style="margin-top:10px;color:#6b7280;font-size:13px;">
+          Avis : indisponible
+        </div>
+      `;
+    } else {
+      const color = getScoreColor(score);
+      scoreHTML = `
+        <div style="margin-top:10px;font-weight:600;color:${color};font-size:13px;">
+          Score avis : ${score}%
+        </div>
+      `;
+    }
 
-        if not price or not title:
-            continue
+    const priceDisplay = formatPrice(offer.price);
+    const buttonLabel = hasRealPrice ? "Voir l’offre" : "💡 Voir le prix réel";
 
-        results.append({
-            "site": site,
-            "title": title,
-            "price": price,
-            "url": link,
-            "estimated": False,
-            "review_score": None,
-            "trust_score": 70
-        })
+    box.innerHTML = `
+      <div style="font-family:Arial, sans-serif;padding:16px;width:280px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;">
+          <strong style="font-size:18px;">Fyndy</strong>
+          <span id="fyndy-close" style="cursor:pointer;font-size:20px;line-height:1;">✕</span>
+        </div>
 
-    return results
+        <div style="margin-top:12px;font-weight:700;font-size:15px;">
+          🔥 Meilleur vendeur fiable
+        </div>
 
+        <div style="margin-top:12px;font-size:14px;line-height:1.45;color:#111827;">
+          ${offer.title || "Produit"}
+        </div>
 
-@app.route("/search")
-def search():
-    query = request.args.get("q", "")
+        <div style="margin-top:10px;font-size:20px;font-weight:700;color:#111827;">
+          ${priceDisplay}
+        </div>
 
-    if not query:
-        return jsonify({"ok": False})
+        <div style="margin-top:6px;color:#6b7280;font-size:13px;">
+          ${offer.site || "Source inconnue"}
+        </div>
 
-    # 🔥 GOOGLE SHOPPING
-    if SERPAPI_KEY:
-        try:
-            params = {
-                "engine": "google",
-                "q": query,
-                "api_key": SERPAPI_KEY,
-                "hl": "fr",
-                "gl": "fr"
-            }
+        ${scoreHTML}
 
-            r = requests.get("https://serpapi.com/search.json", params=params, timeout=5)
-            data = r.json()
+        <a href="${offer.url || "#"}" target="_blank" rel="noopener noreferrer" style="text-decoration:none;">
+          <button style="
+            margin-top:14px;
+            width:100%;
+            background:#3b82f6;
+            color:white;
+            border:none;
+            padding:11px 12px;
+            border-radius:8px;
+            cursor:pointer;
+            font-weight:600;
+            font-size:14px;
+          ">
+            ${buttonLabel}
+          </button>
+        </a>
+      </div>
+    `;
 
-            offers = parse_google(data)
+    box.style.position = "fixed";
+    box.style.bottom = "20px";
+    box.style.right = "20px";
+    box.style.background = "white";
+    box.style.borderRadius = "12px";
+    box.style.boxShadow = "0 10px 30px rgba(0,0,0,0.20)";
+    box.style.zIndex = "999999";
+    box.style.border = "1px solid #e5e7eb";
 
-            if offers:
-                best = sorted(offers, key=lambda x: float(str(x["price"]).replace(",", ".").replace("€", "")))[0]
+    document.body.appendChild(box);
+    fyndyBox = box;
 
-                return jsonify({
-                    "ok": True,
-                    "best_offer": best,
-                    "offers": offers,
-                    "source": "google"
-                })
+    const closeBtn = document.getElementById("fyndy-close");
+    if (closeBtn) {
+      closeBtn.onclick = () => box.remove();
+    }
+  }
 
-        except:
-            pass
+  async function runFyndy() {
+    const queryInput =
+      document.querySelector("input[name='q']") ||
+      document.querySelector("textarea[name='q']") ||
+      document.querySelector("#twotabsearchtextbox");
 
-    # 🔥 FALLBACK RÉEL (IMPORTANT)
-    offers = fallback_real(query)
+    if (!queryInput) return;
 
-    return jsonify({
-        "ok": True,
-        "best_offer": offers[0],
-        "offers": offers,
-        "source": "fallback_real"
-    })
+    const text = (queryInput.value || "").trim();
+    if (!text) return;
 
+    try {
+      const res = await fetch(
+        `https://fyndy-api.onrender.com/search?q=${encodeURIComponent(text)}`
+      );
+      const data = await res.json();
+      createPopup(data);
+    } catch (e) {
+      console.log("Fyndy error", e);
+    }
+  }
 
-if __name__ == "__main__":
-    app.run(port=10000)
+  function addButton() {
+    if (document.getElementById("fyndy-btn")) return;
+
+    const btn = document.createElement("button");
+    btn.id = "fyndy-btn";
+    btn.innerText = "Fyndy";
+
+    btn.style.position = "fixed";
+    btn.style.bottom = "20px";
+    btn.style.right = "20px";
+    btn.style.zIndex = "999999";
+    btn.style.padding = "10px 15px";
+    btn.style.background = "#3b82f6";
+    btn.style.color = "white";
+    btn.style.border = "none";
+    btn.style.borderRadius = "8px";
+    btn.style.cursor = "pointer";
+    btn.style.fontWeight = "600";
+    btn.style.boxShadow = "0 8px 20px rgba(59,130,246,0.35)";
+
+    btn.onclick = runFyndy;
+
+    document.body.appendChild(btn);
+  }
+
+  setTimeout(addButton, 2000);
+})();
