@@ -164,6 +164,8 @@ def is_comparator_site(site: str, title: str = ""):
 
 
 def review_signal_from_score(score):
+    if score is None:
+        return "inconnu"
     if score >= 85:
         return "fiable"
     if score >= 68:
@@ -174,10 +176,6 @@ def review_signal_from_score(score):
 
 
 def extract_google_reviews(data):
-    """
-    Essaie de récupérer la note globale et le nombre d'avis
-    depuis différents blocs Google.
-    """
     candidates = []
 
     knowledge_graph = data.get("knowledge_graph", {}) or {}
@@ -221,21 +219,11 @@ def extract_google_reviews(data):
 
 
 def compute_review_score(site, title, rating=None, reviews_count=0, price=None, median_price=None):
-    """
-    Détecteur d'avis amélioré :
-    - note moyenne
-    - volume d'avis
-    - vendeur/source
-    - signaux suspects
-    - prix anormalement bas
-    - MAIS les vrais excellents avis reprennent la main
-    """
     s = normalize(site)
     t = normalize(title)
 
     score = 58
 
-    # Source / vendeur
     if "amazon" in s:
         score += 4
     if "leroy" in s:
@@ -257,11 +245,9 @@ def compute_review_score(site, title, rating=None, reviews_count=0, price=None, 
     if "seller" in s:
         score -= 4
 
-    # Comparateurs = pas vendeur direct
     if is_comparator_site(site, title):
         score -= 14
 
-    # Signaux dans le titre
     if "promo" in t:
         score -= 3
     if "officiel" in t:
@@ -277,7 +263,6 @@ def compute_review_score(site, title, rating=None, reviews_count=0, price=None, 
     if "compatible" in t:
         score -= 8
 
-    # Note moyenne
     if rating is not None:
         if rating >= 4.8:
             score += 14
@@ -294,7 +279,6 @@ def compute_review_score(site, title, rating=None, reviews_count=0, price=None, 
         else:
             score -= 10
 
-    # Nombre d'avis
     if reviews_count >= 1000:
         score += 12
     elif reviews_count >= 500:
@@ -310,14 +294,12 @@ def compute_review_score(site, title, rating=None, reviews_count=0, price=None, 
     elif reviews_count > 0:
         score -= 3
 
-    # Signaux suspects : très bonne note avec très peu d'avis
     if rating is not None and reviews_count > 0:
         if rating >= 4.8 and reviews_count < 10:
             score -= 12
         elif rating >= 4.7 and reviews_count < 20:
             score -= 8
 
-    # Prix anormalement bas par rapport au marché détecté
     if price is not None and median_price is not None and median_price > 0:
         ratio = price / median_price
         if ratio < 0.75:
@@ -327,7 +309,7 @@ def compute_review_score(site, title, rating=None, reviews_count=0, price=None, 
         elif ratio < 0.92:
             score -= 3
 
-    # PRIORITÉ AUX VRAIS EXCELLENTS AVIS
+    # priorité aux vrais excellents avis
     if rating is not None and reviews_count > 0:
         if rating >= 4.7 and reviews_count >= 500:
             score = max(score, 92)
@@ -403,7 +385,7 @@ def choose_best_offer(offers, mode):
 
     if mode == "lowest_price":
         target = direct_sellers if direct_sellers else valid
-        safe = [o for o in target if o.get("trust_score", 0) >= 50]
+        safe = [o for o in target if (o.get("trust_score") or 0) >= 50 or o.get("trust_score") is None]
         final_target = safe if safe else target
         final_target.sort(key=lambda x: x["price"])
         return final_target[0]
@@ -427,17 +409,23 @@ def enrich_offers_with_review_score(offers):
 
     final = []
     for offer in offers:
-        score = compute_review_score(
-            site=offer.get("site", ""),
-            title=offer.get("title", ""),
-            rating=offer.get("rating"),
-            reviews_count=offer.get("reviews_count", 0),
-            price=offer.get("price"),
-            median_price=median_price
-        )
-        offer["review_score"] = score
-        offer["trust_score"] = score
-        offer["review_signal"] = review_signal_from_score(score)
+        if offer.get("estimated"):
+            offer["review_score"] = None
+            offer["trust_score"] = None
+            offer["review_signal"] = "inconnu"
+        else:
+            score = compute_review_score(
+                site=offer.get("site", ""),
+                title=offer.get("title", ""),
+                rating=offer.get("rating"),
+                reviews_count=offer.get("reviews_count", 0),
+                price=offer.get("price"),
+                median_price=median_price
+            )
+            offer["review_score"] = score
+            offer["trust_score"] = score
+            offer["review_signal"] = review_signal_from_score(score)
+
         final.append(offer)
 
     return final
