@@ -41,6 +41,33 @@ def clean_price(price):
         return None
 
 
+def clean_rating(value):
+    if value is None:
+        return None
+    try:
+        text = str(value).replace(",", ".").strip()
+        match = re.search(r"\d+(\.\d+)?", text)
+        if not match:
+            return None
+        rating = float(match.group())
+        if 0 <= rating <= 5:
+            return rating
+        return None
+    except Exception:
+        return None
+
+
+def clean_reviews_count(value):
+    if value is None:
+        return 0
+    try:
+        text = str(value).replace("\xa0", " ").replace(" ", "")
+        text = re.sub(r"[^\d]", "", text)
+        return int(text) if text else 0
+    except Exception:
+        return 0
+
+
 def get_cached(query: str):
     entry = CACHE.get(query)
     if not entry:
@@ -136,38 +163,57 @@ def is_comparator_site(site: str, title: str = ""):
     return False
 
 
-def compute_trust(site, title):
+def review_signal_from_score(score):
+    if score >= 80:
+        return "fiable"
+    if score >= 65:
+        return "correct"
+    if score >= 50:
+        return "prudence"
+    return "douteux"
+
+
+def compute_review_score(site, title, rating=None, reviews_count=0, price=None, median_price=None):
+    """
+    Détecteur d'avis amélioré :
+    - note moyenne
+    - volume d'avis
+    - vendeur/source
+    - signaux suspects
+    - prix anormalement bas
+    """
     s = normalize(site)
     t = normalize(title)
 
-    score = 70
+    score = 60
 
+    # Source / vendeur
     if "amazon" in s:
-        score += 2
+        score += 4
     if "leroy" in s:
-        score += 6
+        score += 7
     if "manomano" in s:
         score += 4
     if "castorama" in s:
-        score += 5
+        score += 6
     if "darty" in s:
-        score += 5
+        score += 6
     if "lapeyre" in s:
         score += 5
     if "bricoman" in s:
         score += 3
-    if "bricoman" in s:
-        score += 3
+    if "marketplace" in s:
+        score -= 10
+    if "seller" in s:
+        score -= 4
     if "cdiscount" in s:
         score -= 5
-    if "marketplace" in s:
-        score -= 8
-    if "seller" in s:
-        score -= 2
 
+    # Comparateurs = pas vendeur direct
     if is_comparator_site(site, title):
-        score -= 12
+        score -= 14
 
+    # Signaux titre
     if "promo" in t:
         score -= 3
     if "officiel" in t:
@@ -177,21 +223,59 @@ def compute_trust(site, title):
     if "lot" in t:
         score -= 2
     if "reconditionné" in t:
-        score -= 15
+        score -= 18
     if "occasion" in t:
         score -= 20
+    if "compatible" in t:
+        score -= 8
 
-    return max(35, min(95, score))
+    # Note moyenne
+    if rating is not None:
+        if rating >= 4.7:
+            score += 12
+        elif rating >= 4.5:
+            score += 9
+        elif rating >= 4.2:
+            score += 5
+        elif rating >= 4.0:
+            score += 2
+        elif rating >= 3.7:
+            score -= 4
+        else:
+            score -= 10
 
+    # Nombre d'avis
+    if reviews_count >= 500:
+        score += 10
+    elif reviews_count >= 200:
+        score += 8
+    elif reviews_count >= 100:
+        score += 6
+    elif reviews_count >= 30:
+        score += 3
+    elif reviews_count >= 10:
+        score += 1
+    elif reviews_count > 0:
+        score -= 3
 
-def review_signal_from_score(score):
-    if score >= 80:
-        return "fiable"
-    if score >= 65:
-        return "correct"
-    if score >= 50:
-        return "prudence"
-    return "douteux"
+    # Signaux suspects : très bonne note avec très peu d'avis
+    if rating is not None and reviews_count > 0:
+        if rating >= 4.8 and reviews_count < 10:
+            score -= 10
+        if rating >= 4.7 and reviews_count < 5:
+            score -= 12
+
+    # Prix anormalement bas par rapport au marché détecté
+    if price is not None and median_price is not None and median_price > 0:
+        ratio = price / median_price
+        if ratio < 0.75:
+            score -= 12
+        elif ratio < 0.85:
+            score -= 7
+        elif ratio < 0.92:
+            score -= 3
+
+    return max(25, min(95, round(score)))
 
 
 def value_score(offer):
@@ -268,6 +352,36 @@ def choose_best_offer(offers, mode):
     return target[0]
 
 
+def enrich_offers_with_review_score(offers):
+    priced = [o["price"] for o in offers if o.get("price") is not None]
+    median_price = None
+
+    if priced:
+        priced_sorted = sorted(priced)
+        n = len(priced_sorted)
+        if n % 2 == 1:
+            median_price = priced_sorted[n // 2]
+        else:
+            median_price = (priced_sorted[n // 2 - 1] + priced_sorted[n // 2]) / 2
+
+    final = []
+    for offer in offers:
+        score = compute_review_score(
+            site=offer.get("site", ""),
+            title=offer.get("title", ""),
+            rating=offer.get("rating"),
+            reviews_count=offer.get("reviews_count", 0),
+            price=offer.get("price"),
+            median_price=median_price
+        )
+        offer["review_score"] = score
+        offer["trust_score"] = score
+        offer["review_signal"] = review_signal_from_score(score)
+        final.append(offer)
+
+    return final
+
+
 def fallback_offers(query):
     q = normalize(query)
     base = 150
@@ -291,35 +405,37 @@ def fallback_offers(query):
             "title": f"Résultat estimé pour {query}",
             "price": round(base * 0.90, 2),
             "url": f"https://www.manomano.fr/recherche/{quote_plus(query)}",
-            "estimated": True
+            "estimated": True,
+            "relevance_score": 20,
+            "rating": None,
+            "reviews_count": 0,
+            "is_comparator": False
         },
         {
             "site": "Leroy Merlin",
             "title": f"Résultat estimé pour {query}",
             "price": round(base * 0.95, 2),
             "url": f"https://www.leroymerlin.fr/recherche?q={quote_plus(query)}",
-            "estimated": True
+            "estimated": True,
+            "relevance_score": 20,
+            "rating": None,
+            "reviews_count": 0,
+            "is_comparator": False
         },
         {
             "site": "Amazon",
             "title": f"Résultat estimé pour {query}",
             "price": round(base * 1.05, 2),
             "url": f"https://www.amazon.fr/s?k={quote_plus(query)}",
-            "estimated": True
+            "estimated": True,
+            "relevance_score": 20,
+            "rating": None,
+            "reviews_count": 0,
+            "is_comparator": False
         }
     ]
 
-    final = []
-    for offer in offers:
-        trust = compute_trust(offer["site"], offer["title"])
-        offer["relevance_score"] = 20
-        offer["trust_score"] = trust
-        offer["review_score"] = trust
-        offer["review_signal"] = review_signal_from_score(trust)
-        offer["is_comparator"] = is_comparator_site(offer["site"], offer["title"])
-        final.append(offer)
-
-    return final
+    return enrich_offers_with_review_score(offers)
 
 
 def parse_serpapi_shopping(data, query):
@@ -330,6 +446,8 @@ def parse_serpapi_shopping(data, query):
         price = clean_price(item.get("price"))
         site = item.get("source", "Google")
         link = item.get("link") or item.get("product_link") or "#"
+        rating = clean_rating(item.get("rating"))
+        reviews_count = clean_reviews_count(item.get("reviews"))
 
         if not title or price is None:
             continue
@@ -338,8 +456,6 @@ def parse_serpapi_shopping(data, query):
         if rel < 10:
             continue
 
-        trust = compute_trust(site, title)
-
         results.append({
             "site": site,
             "title": title,
@@ -347,13 +463,12 @@ def parse_serpapi_shopping(data, query):
             "url": link,
             "estimated": False,
             "relevance_score": rel,
-            "review_score": trust,
-            "trust_score": trust,
-            "review_signal": review_signal_from_score(trust),
+            "rating": rating,
+            "reviews_count": reviews_count,
             "is_comparator": is_comparator_site(site, title)
         })
 
-    return results
+    return enrich_offers_with_review_score(results)
 
 
 @app.route("/")
