@@ -6,7 +6,6 @@ from urllib.parse import quote_plus
 app = Flask(__name__)
 CORS(app)
 
-# Stockage simple en mémoire
 clicks = []
 
 CONTROLLED_RESULTS = {
@@ -104,8 +103,7 @@ def is_precise_query(query: str) -> bool:
     if len(words) >= 3:
         return True
 
-    has_digit = any(char.isdigit() for char in q)
-    if has_digit:
+    if any(char.isdigit() for char in q):
         return True
 
     return False
@@ -228,8 +226,167 @@ def stats_data():
 
 @app.route("/stats")
 def stats_page():
-    with open("stats.html", "r", encoding="utf-8") as f:
-        html = f.read()
+    html = """
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fyndy - Statistiques</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      background: #f8fafc;
+      margin: 0;
+      padding: 24px;
+      color: #111827;
+    }
+    h1 {
+      margin: 0 0 10px 0;
+      font-size: 28px;
+    }
+    .sub {
+      color: #6b7280;
+      margin-bottom: 20px;
+    }
+    .card {
+      background: white;
+      border-radius: 14px;
+      padding: 18px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+      margin-bottom: 20px;
+    }
+    .counter {
+      font-size: 32px;
+      font-weight: 800;
+      color: #2563eb;
+    }
+    .refresh {
+      color: #6b7280;
+      font-size: 13px;
+      margin-top: 6px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      background: white;
+      border-radius: 14px;
+      overflow: hidden;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.08);
+    }
+    th {
+      background: #2563eb;
+      color: white;
+      text-align: left;
+      font-size: 14px;
+      padding: 12px;
+    }
+    td {
+      padding: 12px;
+      border-bottom: 1px solid #e5e7eb;
+      font-size: 14px;
+      vertical-align: top;
+    }
+    tr:hover td {
+      background: #f8fafc;
+    }
+    a {
+      color: #2563eb;
+      text-decoration: none;
+      font-weight: 600;
+    }
+    a:hover {
+      text-decoration: underline;
+    }
+    .empty {
+      padding: 16px;
+      color: #6b7280;
+    }
+  </style>
+</head>
+<body>
+  <h1>📊 Statistiques Fyndy</h1>
+  <div class="sub">Suivi automatique des clics</div>
+
+  <div class="card">
+    <div>Total clics</div>
+    <div class="counter" id="totalClicks">0</div>
+    <div class="refresh">Mise à jour automatique toutes les 3 secondes</div>
+  </div>
+
+  <table>
+    <thead>
+      <tr>
+        <th>Produit</th>
+        <th>Recherche</th>
+        <th>Source</th>
+        <th>Prix</th>
+        <th>Date</th>
+        <th>Lien</th>
+      </tr>
+    </thead>
+    <tbody id="tableBody">
+      <tr><td colspan="6" class="empty">Chargement...</td></tr>
+    </tbody>
+  </table>
+
+  <script>
+    async function loadStats() {
+      try {
+        const res = await fetch("/stats-data");
+        const data = await res.json();
+
+        document.getElementById("totalClicks").innerText = data.total_clicks || 0;
+
+        const tbody = document.getElementById("tableBody");
+        tbody.innerHTML = "";
+
+        const rows = [...(data.data || [])].reverse();
+
+        if (rows.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" class="empty">Aucun clic enregistré pour le moment.</td></tr>';
+          return;
+        }
+
+        rows.forEach(item => {
+          const tr = document.createElement("tr");
+
+          const price = (item.price !== null && item.price !== undefined && item.price !== "")
+            ? `${item.price} €`
+            : "-";
+
+          const date = item.timestamp
+            ? new Date(item.timestamp).toLocaleString("fr-FR")
+            : "-";
+
+          const link = item.url
+            ? `<a href="${item.url}" target="_blank" rel="noopener noreferrer">Voir</a>`
+            : "-";
+
+          tr.innerHTML = `
+            <td>${item.product || "-"}</td>
+            <td>${item.query || "-"}</td>
+            <td>${item.source || "-"}</td>
+            <td>${price}</td>
+            <td>${date}</td>
+            <td>${link}</td>
+          `;
+
+          tbody.appendChild(tr);
+        });
+      } catch (error) {
+        console.error("Erreur chargement stats :", error);
+        document.getElementById("tableBody").innerHTML =
+          '<tr><td colspan="6" class="empty">Erreur de chargement.</td></tr>';
+      }
+    }
+
+    loadStats();
+    setInterval(loadStats, 3000);
+  </script>
+</body>
+</html>
+"""
     return Response(html, mimetype="text/html")
 
 
