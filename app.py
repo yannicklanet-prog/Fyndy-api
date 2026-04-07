@@ -1,6 +1,7 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from datetime import datetime
+from urllib.parse import quote_plus
 
 app = Flask(__name__)
 CORS(app)
@@ -99,6 +100,45 @@ CONTROLLED_RESULTS = {
 }
 
 
+def build_fallback_offer(query: str):
+    q = query.lower().strip()
+
+    # Si la recherche ressemble à quelque chose de déco / maison / bricolage
+    if any(word in q for word in [
+        "douche", "mitigeur", "robinet", "receveur", "wc",
+        "lavabo", "baignoire", "colonne", "meuble", "vasque"
+    ]):
+        return {
+            "site": "Leroy Merlin",
+            "title": f"Résultats pour : {query}",
+            "price": None,
+            "url": f"https://www.leroymerlin.fr/recherche?q={quote_plus(query)}",
+            "review_score": None
+        }
+
+    # Si ça ressemble à un achat généraliste
+    if any(word in q for word in [
+        "iphone", "samsung", "tv", "télé", "casque", "ordinateur",
+        "bague", "bijou", "chaussure", "montre", "parfum", "cadeau"
+    ]):
+        return {
+            "site": "Google",
+            "title": f"Résultats pour : {query}",
+            "price": None,
+            "url": f"https://www.google.com/search?q={quote_plus(query)}",
+            "review_score": None
+        }
+
+    # fallback par défaut
+    return {
+        "site": "Google",
+        "title": f"Résultats pour : {query}",
+        "price": None,
+        "url": f"https://www.google.com/search?q={quote_plus(query)}",
+        "review_score": None
+    }
+
+
 @app.route("/")
 def home():
     return jsonify({
@@ -120,17 +160,13 @@ def search():
             "best_offer": CONTROLLED_RESULTS[query]["best_offer"]
         })
 
+    fallback_offer = build_fallback_offer(query)
+
     return jsonify({
         "ok": True,
         "query": query,
-        "mode": "unsupported",
-        "best_offer": {
-            "site": "Fyndy",
-            "title": "Recherche non prise en charge dans cette démo",
-            "price": None,
-            "url": "https://www.google.com/search?q=" + query,
-            "review_score": None
-        }
+        "mode": "fallback",
+        "best_offer": fallback_offer
     })
 
 
