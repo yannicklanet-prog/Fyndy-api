@@ -1,194 +1,201 @@
-from flask import Flask, request, jsonify
-from flask_cors import CORS
-import requests
-import os
-import json
-from datetime import datetime
+(function () {
+  const EXISTING_ID = "fyndy-widget";
 
-app = Flask(__name__)
-CORS(app)
+  function removeExistingWidget() {
+    const old = document.getElementById(EXISTING_ID);
+    if (old) old.remove();
+  }
 
-SERPAPI_KEY = os.environ.get("SERPAPI_KEY")
+  function getQueryFromPage() {
+    const url = new URL(window.location.href);
+    const q = url.searchParams.get("q");
+    if (q && q.trim()) return q.trim();
 
-DATA_FILE = "clicks.json"
+    const input =
+      document.querySelector('input[name="q"]') ||
+      document.querySelector('textarea[name="q"]') ||
+      document.querySelector("#twotabsearchtextbox");
 
-# ---------------------------
-# INIT STORAGE
-# ---------------------------
-if not os.path.exists(DATA_FILE):
-    with open(DATA_FILE, "w") as f:
-        json.dump([], f)
-
-def load_clicks():
-    with open(DATA_FILE, "r") as f:
-        return json.load(f)
-
-def save_click(click):
-    data = load_clicks()
-    data.append(click)
-    with open(DATA_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-
-# ---------------------------
-# SEARCH AMAZON
-# ---------------------------
-@app.route("/search")
-def search():
-    query = request.args.get("q")
-
-    if not query:
-        return jsonify({"ok": False})
-
-    try:
-        params = {
-            "engine": "amazon",
-            "amazon_domain": "amazon.fr",
-            "search_term": query,
-            "api_key": SERPAPI_KEY
-        }
-
-        res = requests.get("https://serpapi.com/search", params=params)
-        data = res.json()
-
-        results = data.get("organic_results", [])
-
-        if not results:
-            return jsonify({"ok": False})
-
-        # on prend le premier produit valable
-        best = results[0]
-
-        offer = {
-            "title": best.get("title"),
-            "price": best.get("price"),
-            "url": best.get("link"),
-            "site": "Amazon"
-        }
-
-        return jsonify({
-            "ok": True,
-            "best_offer": offer
-        })
-
-    except Exception as e:
-        print("ERROR SEARCH:", e)
-        return jsonify({"ok": False})
-
-
-# ---------------------------
-# TRACK CLICK
-# ---------------------------
-@app.route("/track_click", methods=["POST"])
-def track_click():
-    data = request.json
-
-    click = {
-        "query": data.get("query"),
-        "product": data.get("product"),
-        "price": data.get("price"),
-        "source": data.get("source"),
-        "url": data.get("url"),
-        "date": datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    if (input && input.value && input.value.trim()) {
+      return input.value.trim();
     }
 
-    save_click(click)
+    return null;
+  }
 
-    return jsonify({"ok": True})
+  function getScore(query) {
+    const q = query.toLowerCase();
 
+    if (q.includes("hansgrohe") || q.includes("grohe")) return 85;
+    if (q.includes("garmin")) return 75;
+    if (q.includes("iphone")) return 82;
+    if (q.includes("samsung")) return 78;
+    if (q.length > 15) return 70;
 
-# ---------------------------
-# STATS PAGE
-# ---------------------------
-@app.route("/stats")
-def stats():
-    clicks = load_clicks()
+    return 55;
+  }
 
-    html = f"""
-    <html>
-    <head>
-        <title>Fyndy Stats</title>
-        <style>
-            body {{
-                font-family: Arial;
-                padding: 40px;
-                background: #f9fafb;
-            }}
-            h1 {{
-                margin-bottom: 20px;
-            }}
-            .box {{
-                background: white;
-                padding: 20px;
-                border-radius: 12px;
-                margin-bottom: 20px;
-                box-shadow: 0 5px 15px rgba(0,0,0,0.05);
-            }}
-            table {{
-                width: 100%;
-                border-collapse: collapse;
-            }}
-            th, td {{
-                padding: 10px;
-                border-bottom: 1px solid #ddd;
-                text-align: left;
-            }}
-            th {{
-                background: #2563eb;
-                color: white;
-            }}
-        </style>
-    </head>
-    <body>
+  function getVisuals(score) {
+    if (score >= 80) {
+      return {
+        color: "#16a34a",
+        label: "BON PLAN",
+        verdict: "ACHETER MAINTENANT",
+        emoji: "🟢"
+      };
+    }
 
-    <h1>📊 Statistiques Fyndy</h1>
+    if (score < 60) {
+      return {
+        color: "#dc2626",
+        label: "MAUVAIS PRIX",
+        verdict: "ATTENDRE",
+        emoji: "🔴"
+      };
+    }
 
-    <div class="box">
-        <h2>Total clics : {len(clicks)}</h2>
-    </div>
+    return {
+      color: "#f59e0b",
+      label: "Prix correct",
+      verdict: "PEUT MIEUX FAIRE",
+      emoji: "🟠"
+    };
+  }
 
-    <div class="box">
-        <table>
-            <tr>
-                <th>Produit</th>
-                <th>Recherche</th>
-                <th>Source</th>
-                <th>Date</th>
-                <th>Lien</th>
-            </tr>
-    """
+  async function trackClick(payload) {
+    try {
+      await fetch("https://fyndy-api.onrender.com/track_click", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+      });
+    } catch (e) {
+      console.error("Fyndy tracking error:", e);
+    }
+  }
 
-    for c in reversed(clicks):
-        html += f"""
-        <tr>
-            <td>{c.get('product')}</td>
-            <td>{c.get('query')}</td>
-            <td>{c.get('source')}</td>
-            <td>{c.get('date')}</td>
-            <td><a href="{c.get('url')}" target="_blank">Voir</a></td>
-        </tr>
-        """
+  function createWidget(query, offer) {
+    removeExistingWidget();
 
-    html += """
-        </table>
-    </div>
+    const score = getScore(query);
+    const visuals = getVisuals(score);
 
-    </body>
-    </html>
-    """
+    const widget = document.createElement("div");
+    widget.id = EXISTING_ID;
+    widget.style.position = "fixed";
+    widget.style.top = "110px";
+    widget.style.right = "20px";
+    widget.style.width = "300px";
+    widget.style.background = "white";
+    widget.style.border = "1px solid #e5e7eb";
+    widget.style.borderRadius = "16px";
+    widget.style.boxShadow = "0 10px 30px rgba(0,0,0,0.15)";
+    widget.style.padding = "16px";
+    widget.style.zIndex = "999999";
+    widget.style.fontFamily = "Arial, sans-serif";
 
-    return html
+    const title = offer?.title || `Offres Amazon pour : ${query}`;
+    const url = offer?.url || `https://www.amazon.fr/s?k=${encodeURIComponent(query)}`;
+    const site = offer?.site || "Amazon";
+    const price = offer?.price;
 
+    let priceHtml = `<div style="font-size:14px;margin-top:8px;color:#374151;">Prix indisponible</div>`;
+    if (price !== null && price !== undefined && price !== "") {
+      priceHtml = `<div style="font-size:14px;margin-top:8px;color:#374151;">Prix détecté : <strong>${price} €</strong></div>`;
+    }
 
-# ---------------------------
-# ROOT
-# ---------------------------
-@app.route("/")
-def home():
-    return "Fyndy API running"
+    widget.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;">
+        <div style="font-size:18px;font-weight:700;">Fyndy</div>
+        <div id="fyndy-close" style="cursor:pointer;font-size:22px;line-height:1;">✕</div>
+      </div>
 
+      <div style="font-size:16px;font-weight:800;color:${visuals.color};margin-bottom:8px;">
+        ${visuals.emoji} ${score}% — ${visuals.label}
+      </div>
 
-# ---------------------------
-# RUN
-# ---------------------------
-if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+      <div style="font-size:13px;color:#374151;margin-bottom:8px;">
+        Analyse basée sur le marché
+      </div>
+
+      <div style="font-size:13px;color:#111827;line-height:1.4;margin-bottom:8px;">
+        ${title}
+      </div>
+
+      <div style="font-size:13px;color:#6b7280;margin-bottom:4px;">
+        Source : ${site}
+      </div>
+
+      ${priceHtml}
+
+      <div style="font-size:15px;font-weight:800;color:#111827;margin-top:12px;margin-bottom:14px;">
+        👉 ${visuals.verdict}
+      </div>
+
+      <button id="fyndy-open" style="
+        width:100%;
+        border:none;
+        border-radius:10px;
+        padding:12px;
+        background:#2563eb;
+        color:white;
+        font-size:15px;
+        font-weight:700;
+        cursor:pointer;
+      ">
+        🔥 Voir la meilleure offre
+      </button>
+    `;
+
+    document.body.appendChild(widget);
+
+    const closeBtn = document.getElementById("fyndy-close");
+    if (closeBtn) {
+      closeBtn.addEventListener("click", () => widget.remove());
+    }
+
+    const openBtn = document.getElementById("fyndy-open");
+    if (openBtn) {
+      openBtn.addEventListener("click", async () => {
+        await trackClick({
+          query: query,
+          product: title,
+          price: price ?? null,
+          source: site,
+          url: url
+        });
+
+        setTimeout(() => {
+          window.open(url, "_blank");
+        }, 200);
+      });
+    }
+  }
+
+  async function runFyndy() {
+    try {
+      const query = getQueryFromPage();
+      if (!query) return;
+
+      const res = await fetch(`https://fyndy-api.onrender.com/search?q=${encodeURIComponent(query)}`);
+      const data = await res.json();
+
+      if (!data || !data.ok) {
+        createWidget(query, null);
+        return;
+      }
+
+      createWidget(query, data.best_offer || null);
+    } catch (e) {
+      console.error("Fyndy widget error:", e);
+    }
+  }
+
+  function start() {
+    setTimeout(runFyndy, 1200);
+  }
+
+  start();
+})();
