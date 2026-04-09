@@ -30,7 +30,6 @@ def save_click(click):
 def home():
     return "Fyndy API OK"
 
-# Endpoint utilisé par l’extension
 @app.route("/search")
 def search():
     query = request.args.get("q", "").strip()
@@ -38,8 +37,6 @@ def search():
     if not query:
         return jsonify({"ok": False, "error": "query manquante"})
 
-    # Prototype vendeur contrôlé :
-    # on renvoie une offre fallback propre et toujours valide
     best_offer = {
         "title": f"Offres Amazon pour : {query}",
         "price": None,
@@ -53,9 +50,8 @@ def search():
         "avg_price": None
     })
 
-# Tracking robuste
-@app.route("/track_click", methods=["POST"])
-def track_click():
+@app.route("/log", methods=["POST"])
+def log_click():
     data = request.get_json(silent=True) or {}
 
     click = {
@@ -71,7 +67,6 @@ def track_click():
 
     return jsonify({"ok": True, "message": "clic enregistré"})
 
-# Stats JSON
 @app.route("/stats-data")
 def stats_data():
     clicks = load_clicks()
@@ -80,7 +75,6 @@ def stats_data():
         "data": clicks
     })
 
-# Stats HTML propre
 @app.route("/stats")
 def stats():
     clicks = load_clicks()
