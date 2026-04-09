@@ -125,6 +125,7 @@ def stats():
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <meta http-equiv="refresh" content="3" />
         <title>Stats Fyndy</title>
         <style>
             body {{
@@ -151,6 +152,12 @@ def stats():
                 font-size: 52px;
                 font-weight: 700;
                 color: #1d4ed8;
+            }}
+
+            .refresh {{
+                font-size: 14px;
+                color: #64748b;
+                margin-bottom: 18px;
             }}
 
             table {{
@@ -183,6 +190,7 @@ def stats():
     </head>
     <body>
         <h1>Stats Fyndy</h1>
+        <div class="refresh">Rafraîchissement automatique toutes les 3 secondes</div>
 
         <div class="card">
             <div>Total clics</div>
